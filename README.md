@@ -28,6 +28,30 @@ A comprehensive collection of practical engineering implementations, deployment 
 
 ---
 
+## 🔐 Environment Configuration & Cloud Credentials
+
+This repository interacts directly with Google Cloud Platform (Cloud TPU, Vertex AI, and Compute Engine).
+
+### 1. Configuration Setup
+A template configuration file [`env.example`](./env.example) is provided. To set up your local environment:
+```bash
+cp env.example .env
+```
+Edit `.env` with your active project details:
+- `GOOGLE_CLOUD_PROJECT`: Your GCP Project ID (e.g. `studio-9772401964-cc157`).
+- `GOOGLE_APPLICATION_CREDENTIALS`: Path to your GCP Service Account JSON key (e.g. `./studio-9772401964-cc157-f61ab654b16f.json`).
+- `HF_TOKEN`: Your Hugging Face user access token (for gated models like Gemma).
+- `ZONE` and `ACCELERATOR_TYPE`: Cloud TPU cluster settings (e.g., `us-central1-a`, `v6e-1` or `v5litepod-1`).
+
+### 2. ⚠️ Security Notice (Strictly Enforced)
+> [!IMPORTANT]
+> **Credential Privacy & Git Protection**:
+> - Real environment files (`.env`, `*.env`) and GCP Service Account private keys (`studio-*.json`, `*.json`, `*.key`, `*.pem`) contain sensitive cloud credentials and are **strictly ignored** via [`.gitignore`](./.gitignore).
+> - **Never commit or push `.env` or service account JSON key files to any remote Git repository.**
+> - Use [`env.example`](./env.example) as the sole version-controlled template for environment variable schemas.
+
+---
+
 ## 🚀 Quick Navigation
 
 - [TorchTPU Sprint 2026: VeRL + TorchTitan + vLLM Guide](./torchtpu-verl-grpo/README.md)

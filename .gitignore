@@ -24,8 +24,11 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual environments
+# Virtual environments & Local Env
 .env
+.env.*
+!.env.example
+*.env
 .venv
 env/
 venv/
@@ -34,12 +37,15 @@ env.bak/
 venv.bak/
 gemma_tpu_env/
 
-# Service account keys and secrets
+# Service account keys and secrets (CRITICAL: Never commit GCP service account keys)
 *.json
 !package.json
 !tsconfig.json
+studio-*.json
+service-account*.json
 *.key
 *.pem
+*.p12
 
 # Training outputs & checkpoints
 outputs/

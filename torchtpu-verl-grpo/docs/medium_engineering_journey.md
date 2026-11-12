@@ -70,18 +70,21 @@ In November 2026, Google (in collaboration with the Meta-PyTorch core team) unve
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Pillar 1 (Native Foundation - TorchTPU)**:
-   - Implemented via PyTorch C++ `PrivateUse1` dispatcher with standard `at::Tensor` memory representations.
-   - Zero JAX dependency during execution. Native compatibility with Hugging Face Transformers v5 (`device_map="tpu"`).
-   - High test coverage: Nightly CI testing across **4,917 Hugging Face models** with a **98% Tier-1 pass rate**.
-2. **Pillar 2 (Inference - vLLM-TorchTPU & TPU Sync)**:
-   - **Sequence-on-Lane FP8 KV Cache**: Halves KV memory consumption and memory bandwidth bottleneck on TPU.
-   - **TPU Sync**: A high-performance C++ library bypassing host memory copying to directly transfer TPU HBM buffers asynchronously across nodes.
-3. **Pillar 3 (RL Post-Training - TorchTitan + VeRL)**:
-   - **TorchTitan** provides clean, decoupled `nn.Module` distributed training leveraging FSDP2, DTensor, and `torch.compile(backend="tpu")`.
-   - **VeRL (GRPO)**: Slide 14 of the official presentation revealed empirical proof: running 250 steps of GRPO with `Qwen3-4B-Base` on **Google Cloud TPU v6e** achieved **100% curve parity with GPU baselines on MATH-500**.
-4. **Pillar 4 (Developer Experience - TPU Agent Suite)**:
-   - Strict adherence to the **"Zero Hallucination"** principle: All throughput, MFU, and latency figures must originate from verified on-chip hardware execution logs.
+**1. Pillar 1 (Native Foundation - TorchTPU)**:
+- Implemented via PyTorch C++ `PrivateUse1` dispatcher with standard `at::Tensor` memory representations.
+- Zero JAX dependency during execution. Native compatibility with Hugging Face Transformers v5 (`device_map="tpu"`).
+- High test coverage: Nightly CI testing across **4,917 Hugging Face models** with a **98% Tier-1 pass rate**.
+
+**2. Pillar 2 (Inference - vLLM-TorchTPU & TPU Sync)**:
+- **Sequence-on-Lane FP8 KV Cache**: Halves KV memory consumption and memory bandwidth bottleneck on TPU.
+- **TPU Sync**: A high-performance C++ library bypassing host memory copying to directly transfer TPU HBM buffers asynchronously across nodes.
+
+**3. Pillar 3 (RL Post-Training - TorchTitan + VeRL)**:
+- **TorchTitan** provides clean, decoupled `nn.Module` distributed training leveraging FSDP2, DTensor, and `torch.compile(backend="tpu")`.
+- **VeRL (GRPO)**: Slide 14 of the official presentation revealed empirical proof: running 250 steps of GRPO with `Qwen3-4B-Base` on **Google Cloud TPU v6e** achieved **100% curve parity with GPU baselines on MATH-500**.
+
+**4. Pillar 4 (Developer Experience - TPU Agent Suite)**:
+- Strict adherence to the **"Zero Hallucination"** principle: All throughput, MFU, and latency figures must originate from verified on-chip hardware execution logs.
 
 ---
 

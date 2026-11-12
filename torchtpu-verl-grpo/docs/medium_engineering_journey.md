@@ -7,6 +7,13 @@
 
 ![Hero Banner: TorchTPU Sprint 2026](./images/01_hero_banner.png)
 
+> ### ⚡ TL;DR / System Specs at a Glance
+> - **Objective:** End-to-end Reinforcement Learning post-training (GRPO) for reasoning on Google Cloud TPU v6e (Trillium).
+> - **The Breakthrough:** Direct `torch.device("tpu")` via PyTorch's native C++ `PrivateUse1` dispatcher — zero JAX conversion, zero lazy-tensor wrappers.
+> - **Stack:** Google Gemma 4 (`google/gemma-4-E2B-it`) + VeRL orchestrator + TorchTitan (FSDP2 trainer) + vLLM-TorchTPU (sampler) + Google Research MBPP.
+> - **Cost & Economics:** Runs on Cloud TPU v6e Spot instances at **~$1.35/hr per chip**, with automated 38-second preemption teardown & multi-zone failover.
+> - **Open-Source Code:** [YuchengWang/learning-tpu/torchtpu-verl-grpo](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo)
+
 If you have ever attempted distributed Reinforcement Learning post-training on Google Cloud TPUs, you are probably intimately familiar with the pain: wrestling with JAX compilation graphs, managing fragile host-device `libtpu` version locks, and watching single-slice Spot instances get silently preempted during an asynchronous rollout step. For years, running PyTorch on TPUs felt like translating idioms across a language barrier using `torch_xla` lazy-tensor wrappers and tracing workarounds.
 
 That changed in November 2026. 
@@ -235,6 +242,20 @@ service-account*.json
 *.pem
 ```
 
+### 🚀 3-Minute Quickstart on Cloud TPU VM
+
+```bash
+# 1. Clone the verified repository
+git clone https://github.com/YuchengWang/learning-tpu.git
+cd learning-tpu/torchtpu-verl-grpo
+
+# 2. Set up the native TorchTPU Python 3.11 isolated environment
+bash scripts/setup_tpu_env.sh
+
+# 3. Launch single-chip hardware diagnostics & MBPP reward test
+python3 src/reward_functions.py
+```
+
 ---
 
 ## Hardware Telemetry & Empirical Verification on TPU v6e
@@ -254,7 +275,7 @@ All performance metrics and operational results documented here are backed by ve
 ### Generation Evolution: Step 0 vs Step 100+ (MBPP Task 11)
 During GRPO training, the combined format and unit-test reward signal guides the model to adopt structured chain-of-thought reasoning:
 
-**Step 0 (Unstructured Raw Sampling)**:
+#### ❌ Step 0: Unstructured Raw Sampling (Reward: 0.00 — Failed)
 ```text
 Prompt: Write a python function to remove first and last occurrence of a given character from the string.
 assert remove_Occ("hello", "l") == "heo"
@@ -272,7 +293,7 @@ Evaluation:
 - Total Reward: 0.00
 ```
 
-**Step 100+ (Structured Chain-of-Thought & Sandboxed Pass)**:
+#### ✅ Step 100+: Structured CoT Reasoning & Unit Test Pass (Reward: 1.50 — SOTA Convergence)
 ```text
 <think>
 Problem: Write a Python function `remove_Occ(s, ch)` that removes only the first and last occurrence of character `ch` from string `s`.

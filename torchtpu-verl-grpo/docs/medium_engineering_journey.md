@@ -1,7 +1,8 @@
 # Engineering Journey: From JAX Fine-Tuning to Native PyTorch (TorchTPU) + VeRL GRPO on Google Cloud TPU v6e
 
 *By Yucheng Wang — Google Developer Expert (AI/ML) | TorchTPU Sprint 2026*  
-*Open-Source Code & Artifacts: [GitHub Repository: YuchengWang/learning-tpu](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo)*
+*Open-Source Code & Artifacts: [GitHub Repository: YuchengWang/learning-tpu](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo)*  
+*Published on Medium: [Read on Medium](https://medium.com/@wfing123/engineering-journey-from-jax-fine-tuning-to-native-pytorch-torchtpu-verl-grpo-on-google-cloud-fa71432a36cb)*
 
 ---
 

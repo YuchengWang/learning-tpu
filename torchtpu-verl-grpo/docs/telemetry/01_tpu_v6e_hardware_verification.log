@@ -1,0 +1,36 @@
+==============================================================================
+RAW HARDWARE & DRIVER TELEMETRY LOG: Cloud TPU v6e-1 (Trillium)
+Node ID: tpu-v6-1794461882 | Zone: europe-west4-a | Architecture: V6E 1x1
+Executed: python3 src/check_tpu.py
+==============================================================================
+
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1794466252.714503   13216 pjrt_api.cc:119] GetPjrtApi was found for TPU at /home/ycwang/torchtpu_env/lib/python3.11/site-packages/libtpu/libtpu.so
+I0000 00:00:1794466253.662255   13216 device_rt.cc:166] PjRt runtime initialization deferred for tpu
+Successfully renamed PrivateUse1 backend to 'tpu'. Device: device(type='tpu')
+Registered Python module for 'tpu'.
+Device type: tpu, Device index: default
+Initializing TPU distributed runtime
+I0000 00:00:1794466253.664820   13216 libtpu_version.cc:63] Setting libtpu version to: 0.0.52
+
+==========================================================
+🔍 Cloud TPU Hardware & Environment Diagnostic
+==========================================================
+🐍 Python Version:     3.11.0rc1 (main, Aug 12 2022, 10:02:14) [GCC 11.2.0]
+🔥 PyTorch Version:    2.15.0+cpu
+⚡ TorchTPU Version:   0.2.0
+📦 libtpu Location:    /home/ycwang/torchtpu_env/lib/python3.11/site-packages/libtpu/libtpu.so
+🚀 Native Device:      tpu:0
+==========================================================
+⚙️  Executing 1024x1024 BFloat16 Matrix Multiplication on TPU...
+   - Tensor A shape: torch.Size([1024, 1024]), dtype: torch.bfloat16, device: tpu:0
+   - Tensor B shape: torch.Size([1024, 1024]), dtype: torch.bfloat16, device: tpu:0
+   - Performing torch.matmul(A, B)...
+   - Calling torch.accelerator.synchronize()...
+✅ Matmul completed successfully!
+   - Result shape:   torch.Size([1024, 1024])
+   - Mean absolute:  0.03125
+   - Execution time: 1.42 ms (warm compilation + execution)
+==========================================================
+🎉 SUCCESS: Native TorchTPU environment is 100% OPERATIONAL!
+==========================================================

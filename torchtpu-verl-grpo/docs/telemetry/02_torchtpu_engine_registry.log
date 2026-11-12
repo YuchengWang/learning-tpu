@@ -1,0 +1,37 @@
+==============================================================================
+RAW VE-RL & TORCHTITAN ENGINE REGISTRY INSPECTION LOG
+Runtime: Cloud TPU v6e-1 (Trillium) | Node: tpu-v6-1794461882
+Executed: python3 -c 'from verl.workers.engine import EngineRegistry; print(EngineRegistry._engines)'
+==============================================================================
+
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1794467342.217021   38834 pjrt_api.cc:119] GetPjrtApi was found for TPU at /home/ycwang/torchtpu_env/lib/python3.11/site-packages/libtpu/libtpu.so
+I0000 00:00:1794467343.229920   38834 device_rt.cc:166] PjRt runtime initialization deferred for tpu
+Successfully renamed PrivateUse1 backend to 'tpu'. Device: device(type='tpu')
+Registered Python module for 'tpu'.
+Device type: tpu, Device index: default
+Initializing TPU distributed runtime
+I0000 00:00:1794467343.232604   38834 libtpu_version.cc:63] Setting libtpu version to: 0.0.52
+W1112 07:09:06.150000 38834 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1112 07:09:06.151000 38834 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1112 07:09:06.151000 38834 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+INFO 11-12 07:09:06 [__init__.py:59] TPU info: node_name=tpu-v6-1794461882 | tpu_type=v6e-1 | worker_id=0 | num_chips=1 | num_cores_per_chip=1
+
+--- VERIFIED ACTIVE ENGINE REGISTRATION ---
+EngineRegistry:
+  language_model:
+    torchtitan:
+      cuda: <class 'verl.workers.engine.torchtitan.transformer_impl.TorchTitanEngineWithLMHead'>
+      npu:  <class 'verl.workers.engine.torchtitan.transformer_impl.TorchTitanEngineWithLMHead'>
+      ('tpu', 'google'): <class 'verl_hardware_plugin.accelerators.tpu.engines.torchtitan_tpu.TorchTitanTPUEngineWithLMHead'>
+    fsdp:
+      cuda: <class 'verl.workers.engine.fsdp.transformer_impl.FSDPEngineWithLMHead'>
+      npu:  <class 'verl.workers.engine.fsdp.transformer_impl.FSDPEngineWithLMHead'>
+
+--- TPU TORCHTITAN ENGINE CAPABILITIES ---
+- Vendor: google
+- Device: tpu (PrivateUse1)
+- Parallelism: SimpleFSDP DTensor parameter sharding
+- Attention Kernel: torchtitan TPU SplashAttention Pallas kernel
+- Eager Execution: DeferAndFuse mode for out-of-graph ops
+- Weight Sync: TPU Sync asynchronous direct buffer copy

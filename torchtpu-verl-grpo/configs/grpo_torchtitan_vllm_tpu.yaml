@@ -1,0 +1,72 @@
+# VeRL GRPO Configuration on Google Cloud TPU (v5e / v6e Trillium)
+# Training Google Research MBPP (Mostly Basic Python Problems)
+# Base Model: Google Gemma 4 Lightweight (google/gemma-4-E2B-it)
+# Distributed Trainer: TorchTitan (SimpleFSDP + SplashAttention)
+# Rollout Sampler: vLLM-TorchTPU (Decoupled Engine)
+
+data:
+  train_files: data/mbpp/train.parquet
+  val_files: data/mbpp/test.parquet
+  prompt_key: prompt
+  max_prompt_length: 512
+  max_response_length: 1024
+  train_batch_size: 16
+  val_batch_size: 32
+  shuffle: True
+
+actor_rollout_ref:
+  hybrid_engine: True
+  model:
+    path: google/gemma-4-E2B-it
+    external_lib: null
+    override_config: {}
+    enable_gradient_checkpointing: True
+
+  actor:
+    strategy: torchtitan
+    model_engine: torchtitan
+    optim:
+      lr: 1e-6
+      lr_warmup_steps_ratio: 0.05
+      weight_decay: 0.01
+      clip_grad_norm: 1.0
+    fsdp_config:
+      spmd_backend: partial_dtensor
+      mesh_dim_names: ["dp", "tp"]
+      wrap_policy:
+        transformer_layer_cls_to_wrap: ["Gemma4TextDecoderLayer", "Gemma4DecoderLayer"]
+
+  rollout:
+    name: vllm
+    temperature: 0.8
+    top_p: 0.95
+    n: 5                       # GRPO group sampling: 5 rollouts per prompt
+    max_num_seqs: 64
+    tensor_model_parallel_size: 1
+    free_cache_engine: True
+
+  ref:
+    offload: True
+
+algorithm:
+  adv_estimator: grpo
+  kl_coef: 0.001
+  clip_ratio: 0.2
+  max_grad_norm: 1.0
+
+reward:
+  custom_reward_function:
+    path: src/reward_functions.py
+    name: compute_score
+  reward_manager:
+    source: register
+    name: naive
+
+trainer:
+  total_training_steps: 250    # Standard benchmark horizon
+  save_freq: 50
+  test_freq: 25
+  project_name: torchtpu-sprint-grpo
+  experiment_name: google_mbpp_gemma4_grpo_v6e
+  logger: ["console"]
+  default_local_dir: outputs/grpo_checkpoints

@@ -1,38 +1,80 @@
 #!/bin/bash
+set -e
 
-# 配置 (v6e Trillium: 下一代性价比首选)
-PROJECT_ID="studio-9772401964-cc157"
-ZONE="us-central1-a"
-ACCELERATOR_TYPE="v6e-1"
-RUNTIME_VERSION="v2-alpha-tpuv6e"
-NODE_ID="tpu-v6-$(date +%s)"
-QUEUED_RESOURCE_ID="qr-v6-$(date +%s)"
-MAX_RUN_DURATION="7d"
+# ==============================================================================
+# Google Cloud TPU v6e (Trillium) Automated Provisioning Script
+# Prioritizes direct Spot allocation with multi-zone fallback
+# ==============================================================================
 
-echo "正在尝试申请最新一代 v6e-1 (Trillium) TPU..."
-echo "Project: $PROJECT_ID, Zone: $ZONE"
-echo "Estimated Cost: ~$1.35/hour (Spot/Flex-start)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LEARNING_TPU_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# 设置项目
+# Load configuration from .env if available
+if [ -f "$LEARNING_TPU_ROOT/.env" ]; then
+    set -a
+    source "$LEARNING_TPU_ROOT/.env"
+    set +a
+fi
+
+PROJECT_ID="${PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-studio-9772401964-cc157}}"
+ACCELERATOR_TYPE="${ACCELERATOR_TYPE:-v6e-1}"
+VERSION="${VERSION:-v2-alpha-tpuv6e}"
+NODE_ID="${NODE_ID:-tpu-v6-$(date +%s)}"
+
+# High-availability zones with confirmed v6e quota and accelerator type
+PREFERRED_ZONES=("us-central1-a" "us-east4-a" "us-east5-c" "us-south1-a" "europe-west4-a")
+
+echo "=========================================================="
+echo "🚀 Requesting TPU v6e ($ACCELERATOR_TYPE) - Spot Instance"
+echo "Project: $PROJECT_ID"
+echo "Node ID: $NODE_ID"
+echo "Price Estimate: ~$1.35/hour (Spot)"
+echo "=========================================================="
+
 gcloud config set project "$PROJECT_ID" --quiet
 
-# 创建资源请求
-gcloud alpha compute tpus queued-resources create "$QUEUED_RESOURCE_ID" \
-    --node-id "$NODE_ID" \
-    --zone "$ZONE" \
-    --accelerator-type "$ACCELERATOR_TYPE" \
-    --runtime-version "$RUNTIME_VERSION" \
-    --provisioning-model=flex-start \
-    --max-run-duration="$MAX_RUN_DURATION"
+SUCCESS=0
+for ZONE in "${PREFERRED_ZONES[@]}"; do
+    echo "🔎 Attempting direct Spot creation in zone: $ZONE..."
+    if gcloud compute tpus tpu-vm create "$NODE_ID" \
+        --zone="$ZONE" \
+        --accelerator-type="$ACCELERATOR_TYPE" \
+        --version="$VERSION" \
+        --spot \
+        --quiet; then
+        
+        echo ""
+        echo "🎉 SUCCESS: TPU v6e Spot instance created!"
+        echo "Node ID: $NODE_ID"
+        echo "Zone:    $ZONE"
+        echo ""
+        echo "Update your .env with:"
+        echo "NODE_ID=\"$NODE_ID\""
+        echo "ZONE=\"$ZONE\""
+        echo ""
+        echo "Connect via SSH:"
+        echo "gcloud compute tpus tpu-vm ssh $NODE_ID --zone $ZONE"
+        SUCCESS=1
+        break
+    else
+        echo "⚠️ Capacity unavailable in $ZONE, trying next zone..."
+    fi
+done
 
-if [ $? -eq 0 ]; then
-    echo "✅ 请求已成功提交: $QUEUED_RESOURCE_ID"
-    echo "正在等待状态初始化 (30秒)..."
-    sleep 35
-    STATE=$(gcloud alpha compute tpus queued-resources describe "$QUEUED_RESOURCE_ID" --zone "$ZONE" --format="value(state.state)")
-    echo "💎 当前状态: $STATE"
-    echo "建议运行以下命令持续监控:"
-    echo "./monitor_tpu.sh $QUEUED_RESOURCE_ID $ZONE"
-else
-    echo "❌ 申请 v6e-1 失败。"
+if [ $SUCCESS -eq 0 ]; then
+    echo ""
+    echo "❌ Spot capacity temporarily exhausted in standard zones."
+    echo "Fallback: Submitting Queued Resource request in ${PREFERRED_ZONES[0]}..."
+    
+    QR_ID="qr-v6-$(date +%s)"
+    gcloud alpha compute tpus queued-resources create "$QR_ID" \
+        --node-id="$NODE_ID" \
+        --zone="${PREFERRED_ZONES[0]}" \
+        --accelerator-type="$ACCELERATOR_TYPE" \
+        --runtime-version="$VERSION" \
+        --provisioning-model=flex-start \
+        --max-run-duration="7d"
+        
+    echo "✅ Queued Resource request submitted: $QR_ID"
+    echo "Monitor with: ./scripts/monitor_tpu.sh $QR_ID ${PREFERRED_ZONES[0]}"
 fi

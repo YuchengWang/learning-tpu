@@ -1,0 +1,33 @@
+# ==============================================================================
+# PyTorch TPU Sprint 2026 - Pinned Dependencies
+# Strict version pinning to prevent upstream breaking changes
+# ==============================================================================
+
+# --- Distributed Training & Serving Infrastructure ---
+ray[default]==2.40.0
+transformers==4.49.0
+datasets==3.3.2
+accelerate==1.4.0
+peft==0.14.0
+hydra-core==1.3.2
+omegaconf==2.3.0
+sentencepiece==0.2.0
+tiktoken==0.8.0
+
+# --- TorchTitan & DTensor Sharding Companion Libs ---
+spmd_types==0.2.3
+torch_checkpointing==0.1.1
+tyro==1.0.17
+einops==0.8.2
+
+# --- Evaluation, Math & Dataset Formatting ---
+sympy==1.13.3
+regex==2024.11.6
+pandas==2.2.3
+pyarrow==17.0.0
+math_verify==0.3.0
+
+# --- Environment & Telemetry ---
+python-dotenv==1.0.1
+tqdm==4.66.5
+psutil==6.0.0

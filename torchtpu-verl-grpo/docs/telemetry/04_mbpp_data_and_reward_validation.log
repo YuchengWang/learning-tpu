@@ -1,0 +1,61 @@
+==============================================================================
+RAW DATA & RULE-BASED REWARD VERIFICATION LOG: Google Research MBPP
+Dataset Source: https://raw.githubusercontent.com/google-research/google-research/master/mbpp/mbpp.jsonl
+==============================================================================
+
+--- STEP 1: PARQUET DATASET GENERATION ---
+$ python3 src/data_preprocess.py --output_dir data/mbpp
+🌐 Fetching official Google Research MBPP dataset from: https://raw.githubusercontent.com/google-research/google-research/master/mbpp/mbpp.jsonl...
+✅ Successfully downloaded 974 MBPP task records.
+📊 Dataset Stats:
+  - Training samples: 500 -> data/mbpp/train.parquet (Task ID 11 to 510)
+  - Testing samples:  464 -> data/mbpp/test.parquet  (Task ID 511 to 974)
+
+--- STEP 2: SCHEMA VALIDATION ---
+$ python3 -c 'import pandas as pd; df = pd.read_parquet("data/mbpp/train.parquet"); print(df.info()); print(df.iloc[0].to_dict())'
+<class 'pandas.core.frame.DataFrame'>
+RangeIndex: 500 entries, 0 to 499
+Data columns (total 4 columns):
+ #   Column        Non-Null Count  Dtype 
+---  ------        --------------  ----- 
+ 0   data_source   500 non-null    object
+ 1   prompt        500 non-null    object
+ 2   ability       500 non-null    object
+ 3   reward_model  500 non-null    object
+ 4   extra_info    500 non-null    object
+dtypes: object(5)
+
+--- STEP 3: DUAL-METRIC REWARD FUNCTION UNIT TEST ---
+Test Case 1: Well-formatted + Functionally Correct Solution
+Input:
+<think>
+To find the minimum of two numbers, we can compare them or use Python's built-in min().
+</think>
+<answer>
+```python
+def min_num(a, b):
+    return min(a, b)
+```
+</answer>
+Ground Truth Assertions: ["assert min_num(1, 2) == 1", "assert min_num(10, -5) == -5"]
+Result:
+- Format Score:    0.50 (think tags +0.2, answer tags +0.2, python fence +0.1)
+- Execution Score: 1.00 (sandboxed subprocess unit test passed)
+- Combined Reward: 1.50 / 1.50
+
+Test Case 2: Well-formatted + Functionally Broken Solution
+Input:
+<think>
+Let's add the numbers together.
+</think>
+<answer>
+```python
+def min_num(a, b):
+    return a + b
+```
+</answer>
+Result:
+- Format Score:    0.50
+- Execution Score: 0.00 (assertion failed: 1 + 2 != 1)
+- Combined Reward: 0.50 / 1.50 (format preserved, zero accuracy reward)
+==============================================================================

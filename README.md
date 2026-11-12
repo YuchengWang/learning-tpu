@@ -10,6 +10,7 @@ A comprehensive collection of practical engineering implementations, deployment 
 | :--- | :--- | :--- | :--- |
 | **[`torchtpu-verl-grpo`](./torchtpu-verl-grpo)** | **TPU v6e / v5e** | **PyTorch/XLA + VeRL + TorchTitan + vLLM-TorchTPU** | **TorchTPU Sprint 2026**: Post-training & Reinforcement Learning with GRPO, TorchTitan distributed trainer, and vLLM-TorchTPU inference engine. |
 | **[`gemma-tpu-training`](./gemma-tpu-training)** | **TPU v5e** (`v5litepod-1`) | **JAX / Flax + Google Tunix + Qwix** | QLoRA fine-tuning of Gemma 3 1B on Cloud TPU v5e with IMF macroeconomic data and automated spot instance provisioning. |
+| **[`gemma4-tpu-training`](./gemma4-tpu-training)** | **TPU v5e** | **JAX / Flax + Google Tunix + Qwix** | Experimental QLoRA fine-tuning of Gemma 4 e2b on Cloud TPU. |
 | **[`gemma-training`](./gemma-training)** | **GPU** (NVIDIA CUDA) | **PyTorch / Hugging Face PEFT** | GPU-based baseline QLoRA fine-tuning workflow for Gemma models. |
 
 ---

@@ -1,7 +1,11 @@
 #!/bin/bash
 
 # 配置
-PROJECT_ID="studio-9772401964-cc157"
+PROJECT_ID="${PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-}}"
+if [ -z "$PROJECT_ID" ]; then
+    echo "❌ Error: PROJECT_ID not set. Please export PROJECT_ID or set it in .env."
+    exit 1
+fi
 ACCELERATOR_TYPE="v5litepod-1"
 RUNTIME_VERSION="v2-tpuv5-lite-cgroup1" # 使用更稳定的版本
 MAX_RUN_DURATION="7d"

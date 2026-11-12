@@ -38,8 +38,8 @@ A template configuration file [`env.example`](./env.example) is provided. To set
 cp env.example .env
 ```
 Edit `.env` with your active project details:
-- `GOOGLE_CLOUD_PROJECT`: Your GCP Project ID (e.g. `studio-9772401964-cc157`).
-- `GOOGLE_APPLICATION_CREDENTIALS`: Path to your GCP Service Account JSON key (e.g. `./studio-9772401964-cc157-f61ab654b16f.json`).
+- `GOOGLE_CLOUD_PROJECT`: Your GCP Project ID (e.g. `your-gcp-project-id`).
+- `GOOGLE_APPLICATION_CREDENTIALS`: Path to your GCP Service Account JSON key (e.g. `./service-account-key.json`).
 - `HF_TOKEN`: Your Hugging Face user access token (for gated models like Gemma).
 - `ZONE` and `ACCELERATOR_TYPE`: Cloud TPU cluster settings (e.g., `us-central1-a`, `v6e-1` or `v5litepod-1`).
 

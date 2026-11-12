@@ -1,6 +1,6 @@
 ==============================================================================
 RAW GCP INCIDENT LOG: Cloud TPU v6e Spot Maintenance Preemption Event
-Project: studio-9772401964-cc157 | Zone: europe-west4-a
+Project: studio-xxxx-demo | Zone: europe-west4-a
 Node ID: tpu-v6-1794461882
 Executed: gcloud compute tpus tpu-vm describe tpu-v6-1794461882 --zone europe-west4-a
 ==============================================================================
@@ -14,14 +14,14 @@ cidrBlock: 10.164.0.0/20
 createTime: '2026-11-12T05:40:57.365264021Z'
 healthDescription: The TPU had a maintenance event at 2026-11-12T07:27:44.500618789Z
 id: '2137011342944823862'
-name: projects/studio-9772401964-cc157/locations/europe-west4-a/nodes/tpu-v6-1794461882
+name: projects/studio-xxxx-demo/locations/europe-west4-a/nodes/tpu-v6-1794461882
 networkConfig:
   enableExternalIps: true
-  network: projects/studio-9772401964-cc157/global/networks/default
-  subnetwork: projects/studio-9772401964-cc157/regions/europe-west4/subnetworks/default
+  network: projects/studio-xxxx-demo/global/networks/default
+  subnetwork: projects/studio-xxxx-demo/regions/europe-west4/subnetworks/default
 networkEndpoints:
 - accessConfig:
-    externalIp: 34.91.208.46
+    externalIp: 34.xxx.xxx.xx
   ipAddress: 10.164.0.4
   port: 8470
 runtimeVersion: v2-alpha-tpuv6e

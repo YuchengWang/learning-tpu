@@ -16,7 +16,11 @@ if [ -f "$LEARNING_TPU_ROOT/.env" ]; then
     set +a
 fi
 
-PROJECT_ID="${PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-studio-9772401964-cc157}}"
+PROJECT_ID="${PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-}}"
+if [ -z "$PROJECT_ID" ]; then
+    echo "❌ Error: PROJECT_ID is not set. Please set it in .env or via export PROJECT_ID=\"your-project-id\""
+    exit 1
+fi
 ACCELERATOR_TYPE="${ACCELERATOR_TYPE:-v6e-1}"
 VERSION="${VERSION:-v2-alpha-tpuv6e}"
 NODE_ID="${NODE_ID:-tpu-v6-$(date +%s)}"
@@ -72,7 +76,7 @@ if [ $SUCCESS -eq 0 ]; then
         --zone="${PREFERRED_ZONES[0]}" \
         --accelerator-type="$ACCELERATOR_TYPE" \
         --runtime-version="$VERSION" \
-        --provisioning-model=flex-start \
+        --spot \
         --max-run-duration="7d"
         
     echo "✅ Queued Resource request submitted: $QR_ID"

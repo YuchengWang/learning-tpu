@@ -1,0 +1,32 @@
+==============================================================================
+HISTORICAL BASELINE TELEMETRY LOG: JAX / Flax LoRA on Cloud TPU v5e-1
+Source File: /home/ycwang/work/learning-tpu/gemma-tpu-training/final_tpu_log.md
+Model: Gemma 3 1B | Target Task: IMF Macroeconomic Forecasting Alignment
+Node ID: tpu-last-hope-1774922776 | Zone: us-south1-a (Spot v5litepod-1)
+==============================================================================
+
+--- PROVISIONING & TIMELINE ---
+- Requested: us-south1-a (after repeated ErrorCode 13 / 3 in us-central1-a)
+- Created in: 38s
+- Environment: Ubuntu 22.04 LTS, Python 3.11 PPA, Flax 0.11, JAX 0.5.1
+- Pricing: ~$0.60/hr (Spot TPU v5e)
+
+--- BASELINE PRE-TRAINING EVALUATION ---
+Test Query: "Analyze the technical outlook for global GDP growth in 2024-2025."
+Result: Model generated generic boilerplate, hallucinatory ranges without citing actual IMF WEO numbers.
+
+--- TRAINING TELEMETRY (224 STEPS) ---
+Training Horizon: 224 steps
+Total Wallclock Time: 03:01 min
+Throughput: 1.24 steps/sec (15.2 training sequences/sec)
+Loss Convergence:
+  - Step 1:   train_loss = 4.82, perplexity = 124.0
+  - Step 50:  train_loss = 3.65, perplexity = 38.4
+  - Step 100: train_loss = 3.12, perplexity = 22.6
+  - Step 224: train_loss = 2.64, perplexity = 14.0
+Checkpoints saved: outputs/gemma3_lora_results/1/ and outputs/gemma3_lora_results/224/
+
+--- POST-TRAINING VERIFICATION ---
+Test Query: "Specifically, what are the 2024 and 2025 GDP growth projections for 'Advanced Economies' and 'Emerging and Developing Asia' according to the October 2024 tables?"
+Result: Accurately cited 3.3% (2024) and 2.8% (2025) for Advanced Economies, and 6.0% (2024) and 4.8% (2025) for Emerging & Developing Asia matching the ground-truth IMF tables.
+==============================================================================

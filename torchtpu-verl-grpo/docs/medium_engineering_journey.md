@@ -2,6 +2,8 @@
 
 > **Document Type**: Living Engineering Log & Medium Article Draft  
 > **Event**: TorchTPU Sprint 2026 (Topic 3: Training, Fine-Tuning & RL)  
+> **Author**: Yucheng Wang (Google Developer Expert - AI/ML)  
+> **Open-Source Repository**: [https://github.com/YuchengWang/learning-tpu](https://github.com/YuchengWang/learning-tpu) (Direct Path: [`torchtpu-verl-grpo`](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo))  
 > **Target Audience**: Machine Learning Engineers, Cloud Architects, and RL/Post-Training Practitioners  
 > **Privacy Notice**: All sensitive credentials, project identifiers, and private tokens in this document have been sanitized and replaced with standardized placeholders.
 
@@ -199,7 +201,7 @@ During active training on Cloud TPU Spot instances, Google Cloud may initiate ma
 
 ## Phase 5: Repository Structuring & Strict Credential Isolation
 
-To maintain open-source hygiene while protecting enterprise secrets, the project was restructured into a clean monorepo: `learning-tpu`:
+To maintain open-source hygiene while protecting enterprise secrets, the project was restructured into a clean public monorepo: [`learning-tpu`](https://github.com/YuchengWang/learning-tpu):
 
 ```text
 learning-tpu/
@@ -279,7 +281,7 @@ During GRPO post-training, the dual-metric verifier actively shapes the generati
 
 | Milestone | Target Scope | Status | Deliverable |
 | :--- | :--- | :--- | :--- |
-| **M1: Foundation Setup** | Environment setup scripts, template configs, sanitized logs | ✅ Completed | GitHub Initial Release |
+| **M1: Foundation Setup** | Environment setup scripts, template configs, sanitized logs | ✅ Completed | [GitHub Repository Release](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo) |
 | **M2: TPU v6e Allocation** | Deploy `request_tpu_v6.sh` in high-availability zones (`europe-west4-a`, `us-central1-a`) | 🔄 In Progress | Running TPU v6e VM Instance |
 | **M3: Environment Provisioning** | Install `torch_tpu`, `torchtitan`, `vllm-tpu`, `verl` | ✅ Completed | Verified `torch.device("tpu")` test |
 | **M4: GRPO PoC Execution** | Run MBPP reasoning alignment (250 steps) on TPU v6e with Gemma 4 | ⏳ Scheduled | Training curves & Loss logs |

@@ -177,18 +177,18 @@ google-pytorch/torchtitan @ commit 9c0aa673 (experiments/tpu native kernels)
 
 ### Reward Function Strategy (MBPP Code Reasoning)
 To elicit robust chain-of-thought code generation without reward hacking:
-1. **Format Reward (0.0 to 0.5)**: Enforces strict XML tags and markdown python code fences:
-   ```text
-   <think>
-   ... problem decomposition, algorithm choice, edge cases ...
-   </think>
-   <answer>
-   ```python
-   def solution(...):
-       ...
-   ```
-   </answer>
-   ```
+
+1. **Format Reward (0.0 to 0.5)**: Enforces strict XML tags and python code structure:
+```text
+<think>
+... problem decomposition, algorithm choice, edge cases ...
+</think>
+<answer>
+def solution(...):
+    ...
+</answer>
+```
+
 2. **Sandboxed Execution Reward (0.0 or 1.0)**: Subprocess-isolated evaluation against official Google Research MBPP unit-test assertions with strict 2.0s timeouts.
 
 ### Real-World Field Note: Spot Preemption & Automated Resilience
@@ -267,10 +267,8 @@ During GRPO post-training, the dual-metric verifier actively shapes the generati
   Edge Cases: Negative numbers, equal values (a == b).
   </think>
   <answer>
-  ```python
   def min_num(a, b):
       return min(a, b)
-  ```
   </answer>
   -> Format Score: 0.50 | Execution Score: 1.00 (All assertions passed) | Total: 1.50
   ```

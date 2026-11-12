@@ -7,12 +7,12 @@
 
 ![Hero Banner: TorchTPU Sprint 2026](./images/01_hero_banner.png)
 
-> ### ⚡ TL;DR / System Specs at a Glance
-> - **Objective:** End-to-end Reinforcement Learning post-training (GRPO) for reasoning on Google Cloud TPU v6e (Trillium).
-> - **The Breakthrough:** Direct `torch.device("tpu")` via PyTorch's native C++ `PrivateUse1` dispatcher — zero JAX conversion, zero lazy-tensor wrappers.
-> - **Stack:** Google Gemma 4 (`google/gemma-4-E2B-it`) + VeRL orchestrator + TorchTitan (FSDP2 trainer) + vLLM-TorchTPU (sampler) + Google Research MBPP.
-> - **Cost & Economics:** Runs on Cloud TPU v6e Spot instances at **~$1.35/hr per chip**, with automated 38-second preemption teardown & multi-zone failover.
-> - **Open-Source Code:** [YuchengWang/learning-tpu/torchtpu-verl-grpo](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo)
+### ⚡ TL;DR: System Specs at a Glance
+- **Objective:** End-to-end Reinforcement Learning post-training (GRPO) for reasoning on Google Cloud TPU v6e (Trillium).
+- **The Breakthrough:** Direct `torch.device("tpu")` via PyTorch's native C++ `PrivateUse1` dispatcher — zero JAX conversion, zero lazy-tensor wrappers.
+- **Stack:** Google Gemma 4 (`google/gemma-4-E2B-it`) + VeRL orchestrator + TorchTitan (FSDP2 trainer) + vLLM-TorchTPU (sampler) + Google Research MBPP.
+- **Cost & Economics:** Runs on Cloud TPU v6e Spot instances at **~$1.35/hr per chip**, with automated 38-second preemption teardown & multi-zone failover.
+- **Open-Source Code:** [YuchengWang/learning-tpu/torchtpu-verl-grpo](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo)
 
 If you have ever attempted distributed Reinforcement Learning post-training on Google Cloud TPUs, you are probably intimately familiar with the pain: wrestling with JAX compilation graphs, managing fragile host-device `libtpu` version locks, and watching single-slice Spot instances get silently preempted during an asynchronous rollout step. For years, running PyTorch on TPUs felt like translating idioms across a language barrier using `torch_xla` lazy-tensor wrappers and tracing workarounds.
 
@@ -26,7 +26,9 @@ In this deep dive, we document the architectural decisions, the quota and infras
 
 ## From JAX to Native PyTorch: The Realities of TPU Workloads
 
-Prior to the TorchTPU Sprint, our distributed LLM fine-tuning pipelines ran on Google Cloud TPU v5e (`v5litepod-1`) chips using JAX, Flax, Google Tunix, and Qwix for domain adaptation on structured economic texts (IMF World Economic Outlook datasets).
+Prior to the TorchTPU Sprint, our distributed LLM fine-tuning pipelines ran on Google Cloud TPU v5e (`v5litepod-1`) chips using JAX, Flax, Google Tunix, and Qwix to fine-tune **Google Gemma 3 1B** on structured economic texts (IMF World Economic Outlook datasets).
+
+![Historical Baseline Architecture: Fine-Tuning Gemma 3 1B with JAX on TPU v5e](./images/01_historical_jax_gemma3_v5e.png)
 
 While JAX provided blazing-fast dense matrix math, our engineering logs recorded consistent friction in everyday development:
 
@@ -82,7 +84,7 @@ At PyTorch Conf in November 2026, Google and the Meta-PyTorch core team introduc
 
 **Pillar 3: Distributed RL Training (TorchTitan + VeRL GRPO)**:
 - **TorchTitan** provides modular distributed training recipes leveraging PyTorch FSDP2, DTensor, and `torch.compile(backend="tpu")`.
-- **VeRL Integration**: Enables decoupled Ray workers to coordinate rollout generation and policy optimization. Benchmarks presented on TPU v6e confirmed that 250 steps of GRPO on `Qwen3-4B-Base` matched GPU convergence curves on MATH-500.
+- **VeRL Integration**: Enables decoupled Ray workers to coordinate rollout generation and policy optimization. Upstream validation presented at PyTorch Conf 2026 confirmed that 250 steps of GRPO on `Qwen3-4B-Base` on TPU v6e matched GPU convergence curves on MATH-500. In this sprint, we adapted and verified this architecture specifically for **Google Gemma 4 (`google/gemma-4-E2B-it`)** on MBPP code reasoning.
 
 **Pillar 4: Developer UX & Tooling (TPU Agent Suite)**:
 - Automated hardware telemetry collectors, XProf tracing integration, and automated Pallas TPU kernel synthesis to simplify low-level performance tuning.
@@ -117,7 +119,8 @@ With 1,536 cores of TPU v6e Spot quota validated, we selected **TPU v6e-1 (singl
 ### Group Relative Policy Optimization (GRPO)
 In contrast to PPO, which requires maintaining a separate Value/Critic network of comparable scale to the Actor, GRPO calculates relative advantages across a group of $G$ rollouts sampled for each input prompt:
 
-$$\text{Advantage}_i = \frac{R_i - \text{mean}(\{R_1, \dots, R_G\})}{\text{std}(\{R_1, \dots, R_G\}) + \epsilon}$$
+> **GRPO Advantage Normalization:**  
+> `Advantage_i = (R_i - mean({R_1, ..., R_G})) / (std({R_1, ..., R_G}) + ε)`
 
 This design eliminates the memory overhead of a Critic model, which is a major advantage when running reasoning models on unified HBM.
 

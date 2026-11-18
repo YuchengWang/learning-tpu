@@ -8,278 +8,200 @@
 
 ![Hero Banner: TorchTPU Sprint 2026](./images/01_hero_banner.png)
 
-### ⚡ TL;DR: System Specs at a Glance
-- **Objective:** End-to-end Reinforcement Learning post-training (GRPO) for reasoning on Google Cloud TPU v6e (Trillium).
-- **The Breakthrough:** Direct `torch.device("tpu")` via PyTorch's native C++ `PrivateUse1` dispatcher — zero JAX conversion, zero lazy-tensor wrappers.
-- **Stack:** Google Gemma 4 (`google/gemma-4-E2B-it`) + VeRL orchestrator + TorchTitan (FSDP2 trainer) + vLLM-TorchTPU (sampler) + Google Research MBPP.
-- **Cost & Economics:** Runs on Cloud TPU v6e Spot instances at **~$1.35/hr per chip**, with automated 38-second preemption teardown & multi-zone failover.
-- **Open-Source Code:** [YuchengWang/learning-tpu/torchtpu-verl-grpo](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo)
+If you have ever tried running distributed RL post-training on Google Cloud TPUs, you probably know the usual tax: translating PyTorch models into JAX or `torch_xla` lazy-tensor graphs, debugging `libtpu` version mismatches, and dealing with Spot preemptions mid-run.
 
-If you have ever attempted distributed Reinforcement Learning post-training on Google Cloud TPUs, you are probably intimately familiar with the pain: wrestling with JAX compilation graphs, managing fragile host-device `libtpu` version locks, and watching single-slice Spot instances get silently preempted during an asynchronous rollout step. For years, running PyTorch on TPUs felt like translating idioms across a language barrier using `torch_xla` lazy-tensor wrappers and tracing workarounds.
+During the **TorchTPU Sprint 2026**, we wanted to see what happens when we drop the XLA translation layer altogether and wire up a **Group Relative Policy Optimization (GRPO)** pipeline using native PyTorch on **Cloud TPU v6e (Trillium)**. Specifically, we integrated **VeRL** as the RL orchestrator, **TorchTitan** for FSDP2 policy updates, and **vLLM-TorchTPU** for rollout generation, targeting **Gemma 4 (`google/gemma-4-E2B-it`)** on the **Google Research MBPP** Python coding dataset.
 
-That changed in November 2026. 
-
-During the **TorchTPU Sprint 2026** (Topic 3: Training, Fine-Tuning & RL), we set out to build and benchmark a production-ready post-training pipeline using the freshly unveiled **Native PyTorch on TPU (TorchTPU)** ecosystem. By pairing **VeRL** (Volcano Engine Reinforcement Learning) as our decoupled orchestrator, **TorchTitan** as our FSDP2 TPU policy trainer, **vLLM-TorchTPU** for high-throughput rollout generation, and **TPU Sync** for asynchronous zero-copy weight synchronization, we established a complete end-to-end Group Relative Policy Optimization (GRPO) workflow on **Google Cloud TPU v6e (Trillium)** hardware.
-
-In this deep dive, we document the architectural decisions, the quota and infrastructure realities of GCP, the underlying C++ dispatcher mechanics of TorchTPU, and the concrete telemetry logs gathered from our test runs.
+This post documents what actually worked, what broke on GCP, how the pieces fit together in our repository, and what we verified on real `v6e-1` hardware before scaling out to multi-chip `v6e-4` training runs.
 
 ---
 
-## From JAX to Native PyTorch: The Realities of TPU Workloads
+## From JAX to Native PyTorch: Why We Moved Off `torch_xla`
 
-Prior to the TorchTPU Sprint, our distributed LLM fine-tuning pipelines ran on Google Cloud TPU v5e (`v5litepod-1`) chips using JAX, Flax, Google Tunix, and Qwix to fine-tune **Google Gemma 3 1B** on structured economic texts (IMF World Economic Outlook datasets).
+Before this sprint, our TPU fine-tuning workloads ran on Cloud TPU v5e (`v5litepod-1`) using JAX, Flax, Google Tunix, and Qwix to fine-tune **Gemma 3 1B** on IMF World Economic Outlook data.
 
 ![Historical Baseline Architecture: Fine-Tuning Gemma 3 1B with JAX on TPU v5e](./images/01_historical_jax_gemma3_v5e.png)
 
-While JAX provided blazing-fast dense matrix math, our engineering logs recorded consistent friction in everyday development:
+JAX gave us fast dense matrix math (224 training steps in 3 minutes 1 second, bringing train loss from 4.82 down to 2.64), but day-to-day iteration had two recurring friction points:
 
-### 1. Scheduler Contention and Error Codes
-- **Error Code 13 (`INTERNAL`)**: Surfaced repeatedly when queueing single-slice `v5litepod-1` requests using `flex-start` in congested zones like `us-central1-a`. Under high cluster load, the single-slice queued resource scheduler locked up waiting for fragmented allocations.
-- **Error Code 3 (`INVALID_ARGUMENT`)**: `FLEX_START provisioning model is not supported for accelerator type "v3-8" in location "us-central1-a"`. Flex-start allocation was engineered primarily for multi-rack pods, not isolated single-chip nodes.
-- **Error Code 8 (`RESOURCE_EXHAUSTED`)**: Common during peak hours across primary US regions.
-- **Engineering Fix**: We built an automated multi-region Spot polling script that fell back to uncongested zones (such as `us-south1-a`), reliably acquiring TPU v5e Spot instances at **~$0.60/hr** with automated retry backoffs.
-
-### 2. Runtime and Library Fragility
-- **Python Runtime Misalignments**: Standard TPU VM Ubuntu images shipped with Python 3.10, whereas modern Flax releases (`>=0.11`) required Python 3.11+. Manually injecting external PPAs into root system packages risked breaking system `libtpu.so` drivers, resulting in instant segfaults on device initialization. *(In our current TorchTPU deployment, we resolve this by isolating Python 3.11 inside a dedicated virtual environment via `setup_tpu_env.sh`, ensuring wheel-bundled `libtpu` loads cleanly without polluting system `glibc` libraries).*
-- **Compilation Warm-up Delays**: JAX JIT compilation on the initial rollout step would stall execution for several minutes without diagnostic output, making interactive debugging painful.
-
-These operational hurdles highlighted the need for an idiomatic, native PyTorch runtime that behaves like standard PyTorch on modern hardware.
+1. **Scheduler Contention and Zone Errors**: Requesting single-slice `v5litepod-1` Spot capacity with `flex-start` in congested zones like `us-central1-a` repeatedly hit `Error Code 13 (INTERNAL)`, `Error Code 8 (RESOURCE_EXHAUSTED)`, and `Error Code 3 (INVALID_ARGUMENT)` when testing fallback types like `v3-8`. Switching to a multi-zone polling fallback (`us-south1-a`) got us reliable Spot v5e instances at **~$0.60/hr** (created in 38s).
+2. **Python Runtime & Compilation Friction**: Standard TPU VM Ubuntu images shipped with Python 3.10, while newer Flax releases (`>=0.11`) required Python 3.11+. Installing external PPAs into system Python risked breaking `libtpu.so` and causing immediate segfaults on device init. In our current TorchTPU setup, `scripts/setup_tpu_env.sh` isolates Python 3.11 in a dedicated virtual environment so wheel-bundled `libtpu` loads cleanly without touching system `glibc`. On top of that, JAX JIT warm-up stalls on the first rollout step made interactive debugging slow.
 
 ---
 
-## Under the Hood of TorchTPU: C++ Dispatcher and the Four Pillars
+## Under the Hood of TorchTPU
 
-At PyTorch Conf in November 2026, Google and the Meta-PyTorch core team introduced the official **TorchTPU** architecture. As detailed in Google Developer Advocate Wei Wei's keynote (*"Introduction to TPU Software Ecosystem"*), this represents an architectural break from legacy execution models.
-
-> **The Design Target**: Eliminate the translation layer. No more converting models to JAX and no more opaque `torch_xla` lazy-tensor graphs. Developers can run pure PyTorch code directly on TPUs using standard device calls: `torch.device("tpu")`.
+At PyTorch Conf in November 2026, Google and the Meta-PyTorch team introduced **TorchTPU**, replacing `torch_xla` lazy-tensor wrappers with a native C++ `PrivateUse1` dispatcher. Instead of tracing graphs behind the scenes, TPU tensors behave as standard `at::Tensor` objects in device HBM via `torch.device("tpu")`.
 
 ![The Paradigm Shift: From Legacy JAX/Lazy Tensor to Native TorchTPU (2026)](./images/02_torchtpu_paradigm_shift.png)
 
-### The Four Pillars of the Modern TPU Stack
+Rather than rebuilding an RL stack from scratch, we picked three components from the TorchTPU ecosystem that map cleanly onto GRPO:
 
-```text
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                 TorchTPU Ecosystem (2026)                              │
-├────────────────────────────┬─────────────────────────────┬─────────────────────────────┤
-│   Pillar 1: Native Base    │  Pillar 2: Serving Engine   │    Pillar 3: Pre & Post RL  │
-│  - torch_tpu (C++ Private1)│  - vLLM-TorchTPU (FP8 KV)   │  - TorchTitan (Trainer)     │
-│  - 450+ Core ATen Ops      │  - SGLang-TorchTPU          │  - VeRL (GRPO Controller)   │
-│  - c10d ProcessGroup Dist  │  - TPU Sync (Zero-Copy KV)  │  - TPU Sync (Weight Sync)   │
-└────────────────────────────┴─────────────────────────────┴─────────────────────────────┘
-                                           │
-                                           ▼
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                     Pillar 4: Autonomous Developer UX (TPU Agent Suite)                │
-│    Hardware-Verified Telemetry Profiling | Automated Pallas Kernel Optimization        │
-└────────────────────────────────────────────────────────────────────────────────────────┘
-```
-
-**Pillar 1: Native Foundation (TorchTPU)**:
-- Integrated directly into PyTorch via the C++ `PrivateUse1` dispatcher key, representing TPU tensors as native `at::Tensor` objects in device HBM.
-- Operates without JAX runtime dependencies. Supports standard Hugging Face Transformers v5 workflows (`device_map="tpu"`).
-- Verified against **4,917 Hugging Face models** in nightly CI, maintaining a **98% Tier-1 pass rate**.
-
-**Pillar 2: Inference Serving (vLLM-TorchTPU & TPU Sync)**:
-- **Sequence-on-Lane FP8 KV Cache**: Employs Pallas TPU kernels to cut KV cache memory footprint by ~48%, unlocking larger rollout batch sizes during generation.
-- **TPU Sync**: High-performance C++ transport library bypassing CPU host memory copying to stream TPU HBM buffers directly across workers with sub-15ms transfer latencies.
-
-**Pillar 3: Distributed RL Training (TorchTitan + VeRL GRPO)**:
-- **TorchTitan** provides modular distributed training recipes leveraging PyTorch FSDP2, DTensor, and `torch.compile(backend="tpu")`.
-- **VeRL Integration**: Enables decoupled Ray workers to coordinate rollout generation and policy optimization. Upstream validation presented at PyTorch Conf 2026 confirmed that 250 steps of GRPO on `Qwen3-4B-Base` on TPU v6e matched GPU convergence curves on MATH-500. In this sprint, we adapted and verified this architecture specifically for **Google Gemma 4 (`google/gemma-4-E2B-it`)** on MBPP code reasoning.
-
-**Pillar 4: Developer UX & Tooling (TPU Agent Suite)**:
-- Automated hardware telemetry collectors, XProf tracing integration, and automated Pallas TPU kernel synthesis to simplify low-level performance tuning.
+- **`torch_tpu` (Native C++ `PrivateUse1` Runtime)**: Eliminates JAX runtime dependencies and supports standard PyTorch eager/compiled execution (`torch.compile(backend="tpu")`) and `c10d` collectives. Upstream CI validated it across 4,917 Hugging Face models (98% Tier-1 pass rate).
+- **vLLM-TorchTPU & TPU Sync (Rollout Serving)**: Uses Pallas TPU kernels for Sequence-on-Lane FP8 KV caching (~48% KV memory reduction) and **TPU Sync**, a C++ transport layer that copies HBM buffers directly without bouncing through CPU host memory.
+- **TorchTitan + VeRL (Distributed RL Training)**: TorchTitan handles FSDP2/DTensor sharding and SplashAttention Pallas kernels, while VeRL orchestrates the GRPO loop. Upstream PyTorch Conf benchmarks showed 250 steps of GRPO on `Qwen3-4B-Base` on TPU v6e matching GPU convergence on MATH-500; our repo adapts this recipe for `google/gemma-4-E2B-it` on MBPP.
 
 ---
 
-## GCP Hardware Sizing: Navigating TPU v6e Trillium Quotas and Spot Pricing
+## GCP Hardware Sizing & Spot Provisioning
 
-Before deploying our RL workloads, we conducted a systematic audit of our Google Cloud Platform project quotas across primary TPU regions:
+We audited our GCP project quotas (`gcloud alpha services quota list --service=tpu.googleapis.com`) before provisioning:
 
-```bash
-# Auditing regional TPU quota allocations
-gcloud alpha services quota list --service=tpu.googleapis.com
-```
+- **TPU v6e (Trillium)**: 1,536 Spot cores (`tpu-v6e-preemptible`) and 512 On-Demand cores (`tpu-v6e`), with Spot pricing around **~$1.35/hour per chip** and **32GB HBM per chip** (4.7x compute density over v5e).
+- **TPU v5e (LitePod)**: 1,536 Spot cores and 512 On-Demand cores at **~$0.60/hour per chip**.
 
-### Verified Regional Allocations:
-- **TPU v6e (Trillium)**:
-  - `tpu-v6e-preemptible` (Spot): **1,536 Cores** (Active in `us-central1`, `us-east5`, `us-south1`, `europe-west4`).
-  - `tpu-v6e` (On-Demand): **512 Cores**.
-  - Spot Unit Cost: **~$1.35/hour** per v6e chip.
-- **TPU v5e (LitePod)**:
-  - `PREEMPTIBLE_TPU_LITE_PODSLICE_V5`: **1,536 Cores**.
-  - `TPU_LITE_PODSLICE_V5`: **512 Cores**.
-  - Spot Unit Cost: **~$0.60/hour** per v5e chip.
+We used **TPU v6e-1 (1 chip, 32GB HBM)** for environment verification, engine introspection, and reward pipeline testing, reserving **TPU v6e-4 (4 chips, 128GB aggregate HBM)** for multi-chip GRPO training.
 
-With 1,536 cores of TPU v6e Spot quota validated, we selected **TPU v6e-1 (single chip, 32GB HBM)** for development and unit testing, and **TPU v6e-4 (4 chips, 128GB aggregate HBM)** for distributed GRPO rollout and training.
+### Handling Spot Preemptions and Zone Fallback
+
+![Cloud TPU Spot Preemption & Automated Recovery Lifecycle](./images/05_spot_preemption_lifecycle.png)
+
+Spot TPUs cut compute costs by roughly 70%, but GCP will reclaim nodes during datacenter maintenance (`state: PREEMPTED`). During our `v6e-1` verification in `europe-west4-a`, we hit a live maintenance preemption (`03_gcp_spot_preemption_event.log`) that dropped SSH with exit code 255.
+
+To handle capacity fragmentation across zones without manual clicking, we wrote two lightweight shell helpers:
+- [`scripts/request_tpu_v6.sh`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/scripts/request_tpu_v6.sh): Iterates through `us-central1-a`, `us-east4-a`, `us-east5-c`, `us-south1-a`, and `europe-west4-a` for direct Spot creation, and falls back to `gcloud alpha compute tpus queued-resources create` if immediate Spot capacity is exhausted.
+- [`scripts/monitor_tpu.sh`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/scripts/monitor_tpu.sh): Polls `gcloud alpha compute tpus queued-resources describe` every 30 seconds until the queued resource transitions to `ACTIVE` or `FAILED`.
+
+When a node is preempted, we delete the stalled VM (`gcloud compute tpus tpu-vm delete ... --quiet`) and re-provision via `request_tpu_v6.sh` into an available zone.
 
 ---
 
-## Decoupled Architecture: VeRL, TorchTitan, and vLLM-TorchTPU in Action
+## GRPO Architecture: VeRL, TorchTitan, and vLLM-TorchTPU
 
-### Group Relative Policy Optimization (GRPO)
-In contrast to PPO, which requires maintaining a separate Value/Critic network of comparable scale to the Actor, GRPO calculates relative advantages across a group of $G$ rollouts sampled for each input prompt:
+### Why GRPO Fits Single-Slice HBM
 
-> **GRPO Advantage Normalization:**  
+Unlike PPO, which keeps a separate Value/Critic model in memory alongside the Actor, **Group Relative Policy Optimization (GRPO)** scores a group of $G$ sampled completions per prompt and normalizes advantages within the group:
+
 > `Advantage_i = (R_i - mean({R_1, ..., R_G})) / (std({R_1, ..., R_G}) + ε)`
 
-This design eliminates the memory overhead of a Critic model, which is a major advantage when running reasoning models on unified HBM.
+Dropping the Critic network frees up substantial HBM, making it practical to run 2B-class reasoning models on a compact TPU slice.
 
 ![Decoupled Hybrid Architecture: VeRL + TorchTitan + vLLM-TorchTPU on Cloud TPU](./images/03_system_architecture_verl_grpo.png)
 
-### Execution Pipeline on Cloud TPU
-The physical execution on Cloud TPU is partitioned into two specialized engines orchestrated via Ray:
+### Hybrid Engine Execution Flow
+
+In [`configs/grpo_torchtitan_vllm_tpu.yaml`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/configs/grpo_torchtitan_vllm_tpu.yaml), we enable VeRL's **`hybrid_engine: True`** mode (`n: 5` rollouts per prompt, `train_batch_size: 16`). Rather than dedicating separate physical TPU slices to rollout and training, both engines share the same TPU HBM via time-slicing: vLLM-TorchTPU generates $G$ candidate completions, releases/offloads its KV cache (`free_cache_engine: True`), and TorchTitan runs the FSDP2 policy update before syncing weights back via TPU Sync.
 
 ```text
-  [Prompt Batch] ──► Ray Orchestrator
+  [Prompt Batch] ──► VeRL Ray Orchestrator (hybrid_engine: True)
                            │
        ┌───────────────────┴───────────────────┐
-       ▼                                       ▼
+       ▼ (Phase 1: Rollout)                    ▼ (Phase 2: Policy Update)
 ┌───────────────────────────────┐   ┌───────────────────────────────┐
 │     vLLM-TorchTPU (Sampler)   │   │     TorchTitan (Trainer)      │
-│  - Decoupled rollout worker   │   │  - Distributed Policy Update  │
-│  - Sequence-on-Lane FP8 KV    │   │  - FSDP2 / DTensor on TPU     │
-│  - Generates G candidates     │   │  - Gradient Clipping & Loss   │
-│  - ~145 tok/s per core        │   │  - torch.compile(backend="tpu")│
+│  - Sequence-on-Lane FP8 KV    │   │  - SimpleFSDP / DTensor       │
+│  - Generates G=5 candidates   │   │  - SplashAttention Pallas     │
+│  - Frees KV cache after gen   │   │  - torch.compile(backend="tpu")│
 └──────────────┬────────────────┘   └───────────────▲───────────────┘
                │                                    │
                ▼                                    │
   [Rule-Based Reward Evaluator]                     │
-  - <think> CoT validation                          │
+  - <think> / <answer> format check                 │
   - Subprocess unit-test execution                  │
                │                                    │
                └─────────► Advantage Computation ───┘
                                  ▲
-                                 │ TPU Sync (Sub-15ms Async Transfer)
+                                 │ TPU Sync (Async HBM Weight Sync)
                                  └───────────────────────────────────┘
 ```
 
-### Complete Google-Native Ecosystem Synergy
+### The Stack & Pinned Versions
 
-![100% Google-Native Synergy Pipeline](./images/04_google_native_stack.png)
+![Google-Native Stack for TorchTPU GRPO](./images/04_google_native_stack.png)
 
-To maximize architectural efficiency, our implementation integrates tightly with Google's modern open-source stack:
-
-| Component | Selected Technology | Technical Role |
+| Component | Technology | Role in This Repo |
 | :--- | :--- | :--- |
-| **Hardware** | **Google Cloud TPU v6e (Trillium)** | 4.7x compute density over v5e, 32GB HBM per chip, ~$1.35/hr Spot pricing |
-| **Compiler / Dispatcher** | **Google TorchTPU (Native PyTorch)** | C++ `PrivateUse1` dispatcher, standard `at::Tensor` lifecycle, zero lazy-tensor overhead |
-| **Base Model** | **Google Gemma 4 (`google/gemma-4-E2B-it`)** | 2026 flagship open weights; native support for TPU SplashAttention kernels |
-| **Dataset** | **Google Research MBPP** | 974 curated Python coding problems with executable unit tests and edge cases |
-| **RL Orchestrator** | **VeRL + TorchTitan + vLLM-TorchTPU** | Decoupled Ray orchestrator with FSDP2 training and high-throughput TPU rollout |
+| **Hardware** | Cloud TPU v6e (Trillium) | 32GB HBM per chip, ~$1.35/hr Spot |
+| **Runtime** | `torch_tpu==0.2.0` | PyTorch `2.15.0+cpu`, `libtpu==0.0.52`, C++ `PrivateUse1` dispatcher |
+| **Trainer** | `torchtitan==0.3.0` (`google-pytorch/torchtitan @ 9c0aa673`) | SimpleFSDP + DTensor + TPU SplashAttention |
+| **Sampler** | `vllm-tpu==0.21.0` | Rollout generation with FP8 KV cache |
+| **Orchestrator** | `verl @ v0.9.1` + `verl-hardware-plugin @ v0.1.0` | Ray GRPO loop (`TorchTitanTPUEngineWithLMHead`) |
+| **Base Model** | `google/gemma-4-E2B-it` | Policy model under `transformers==4.49.0` (pinned in `requirements.txt`) |
+| **Dataset** | Google Research MBPP | 974 raw tasks; skipping tasks 1–10 yields **500 train + 464 test** |
 
-### Pinned Dependency Matrix
-To prevent upstream breaking changes during rapid development cycles, our environment pins verified tags and commit hashes:
+*(Note: While TorchTPU upstream also demonstrated `Transformers v5` `device_map="tpu"` workflows, our [`requirements.txt`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/requirements.txt) pins `transformers==4.49.0` alongside `ray[default]==2.40.0`, `accelerate==1.4.0`, and `spmd_types==0.2.3` for reproducibility with `verl v0.9.1`.)*
 
-```txt
-# Core TPU Native Runtime
-torch_tpu == 0.2.0 (PyTorch 2.15.0+cpu, libtpu 0.0.52)
-torchtitan == 0.3.0
-vllm-tpu == 0.21.0
-spmd_types == 0.2.3
-torch_checkpointing == 0.1.1
+### Two-Stage MBPP Reward Design
 
-# Frameworks & Hardware Plugins
-verl @ git+https://github.com/verl-project/verl.git@v0.9.1
-verl-hardware-plugin @ git+https://github.com/verl-project/verl-hardware-plugin.git@v0.1.0
-google-pytorch/torchtitan @ commit 9c0aa673 (experiments/tpu native kernels)
-```
+To encourage structured reasoning without reward hacking, `src/reward_functions.py` combines two deterministic signals (max total score: **1.50**):
 
-### Reward Function Strategy (MBPP Code Reasoning)
-To incentivize rigorous chain-of-thought problem solving without reward hacking, we implement a two-stage evaluation metric:
-
-1. **Format Reward (0.0 to 0.5)**: Validates correct reasoning structure and code encapsulation:
-```text
+1. **Format Reward (0.0 to 0.50)**: Checks for `<think>...</think>` (+0.20), `<answer>...</answer>` (+0.20), and a fenced Python code block inside the answer (+0.10):
+````text
 <think>
-[Step-by-step problem breakdown, algorithmic complexity, edge case analysis]
+Step-by-step problem breakdown, edge cases, and complexity check.
 </think>
 <answer>
+```python
 def solution(...):
     ...
-</answer>
 ```
-
-2. **Sandboxed Execution Reward (0.0 or 1.0)**: Executes generated code against official Google Research MBPP unit assertions inside an isolated Python subprocess with a strict 2.0-second timeout to prevent infinite loops.
-
-### Handling Cloud TPU Spot Preemption Gracefully
-
-![Cloud TPU Spot Preemption & Automated Recovery Lifecycle](./images/05_spot_preemption_lifecycle.png)
-
-Running on Cloud TPU Spot instances offers substantial cost savings (~70% discount), but requires handling maintenance preemptions (`state: PREEMPTED`). Our automated management scripts (`request_tpu_v6.sh` and `monitor_tpu.sh`) continuously inspect instance health via the GCP TPU API. When a preemption signal is detected, the script gracefully persists the latest checkpoint, unlinks the worker within 40 seconds, and provisions a replacement instance across alternative quota zones without data loss.
+</answer>
+````
+2. **Timeout-Isolated Subprocess Execution Reward (0.0 or 1.0)**: Extracts the code from `<answer>` and runs it against the MBPP `test_list` assertions inside a `multiprocessing.Process` using `exec()` with a strict **2.0-second timeout** to catch infinite loops without hanging the Ray worker.
 
 ---
 
-## Production Monorepo Structure & Secret Isolation
+## Running the Hardware Check & MBPP Verifier Locally
 
-All code, configurations, provisioning scripts, and verification artifacts are organized in our public open-source repository: [`learning-tpu`](https://github.com/YuchengWang/learning-tpu):
-
-```text
-learning-tpu/
-├── .gitignore                          # Zero-leakage credential protection
-├── env.example                         # Sanitized environment template
-├── README.md                           # Master project catalog
-├── torchtpu-verl-grpo/                 # 🌟 TorchTPU Sprint 2026 Core
-│   ├── configs/                        # Hydra configurations for VeRL & TorchTitan
-│   ├── docs/                           # Technical documentation and diagrams
-│   ├── scripts/                        # TPU v6e provisioning & VM setup automation
-│   ├── src/                            # Reward functions, MBPP verifiers, preprocessing
-│   └── telemetry/                      # Hardware-verified execution logs
-├── gemma-tpu-training/                 # Historical JAX TPU v5e baseline
-└── gemma-training/                     # Historical GPU baseline
-```
-
-### Credential Protection Rules (`.gitignore`)
-To maintain zero-leakage security in an open-source repository, all local credentials, GCP service account keys, and environment variables are strictly blocked from git commits:
-
-```gitignore
-# Zero-Trust Secret Isolation
-.env
-.env.*
-!.env.example
-*.env
-*.json
-!package.json
-!tsconfig.json
-studio-*.json
-service-account*.json
-*.key
-*.pem
-```
-
-### 🚀 3-Minute Quickstart on Cloud TPU VM
+All code, configs, and logs live in [`YuchengWang/learning-tpu/torchtpu-verl-grpo`](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo). On a fresh Cloud TPU v6e VM, you can verify the native PyTorch runtime and prepare the MBPP Parquet dataset in three commands:
 
 ```bash
-# 1. Clone the verified repository
+# 1. Clone the repository
 git clone https://github.com/YuchengWang/learning-tpu.git
 cd learning-tpu/torchtpu-verl-grpo
 
-# 2. Set up the native TorchTPU Python 3.11 isolated environment
+# 2. Create the isolated Python 3.11 + TorchTPU environment
 bash scripts/setup_tpu_env.sh
 
-# 3. Launch single-chip hardware diagnostics & MBPP reward test
-python3 src/reward_functions.py
+# 3. Run single-chip hardware diagnostics and build MBPP train/test Parquets
+python3 src/check_tpu.py
+python3 src/data_preprocess.py --output_dir data/mbpp
 ```
 
 ---
 
-## Hardware Telemetry & Empirical Verification on TPU v6e
+## Hardware Telemetry & Verification Logs on TPU v6e
 
 ![Training Telemetry & Reward Progression on Cloud TPU v6e](./images/06_training_telemetry_curves.png)
 
-All performance metrics and operational results documented here are backed by verified machine execution logs preserved directly in the repository:
+I've checked the raw diagnostic, engine registry, preemption, and MBPP verification logs into [`telemetry/`](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo/telemetry) so you can inspect the exact outputs:
 
-| Log Artifact | Target Subject | Key Empirical Result |
+| Log Artifact | Subject | Key Observed Result |
 | :--- | :--- | :--- |
-| **[`01_tpu_v6e_hardware_verification.log`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/telemetry/01_tpu_v6e_hardware_verification.log)** | TPU v6e Trillium Diagnostic | 1024x1024 BFloat16 Matmul passed on `tpu:0` in 1.42 ms via `torch.accelerator.synchronize()` |
-| **[`02_torchtpu_engine_registry.log`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/telemetry/02_torchtpu_engine_registry.log)** | Engine Introspection | `('tpu', 'google'): TorchTitanTPUEngineWithLMHead` registered with SplashAttention Pallas kernel |
-| **[`03_gcp_spot_preemption_event.log`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/telemetry/03_gcp_spot_preemption_event.log)** | Spot Fault Tolerance | GCP maintenance preemption event (`state: PREEMPTED`) safely torn down in 38s |
-| **[`04_mbpp_data_and_reward_validation.log`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/telemetry/04_mbpp_data_and_reward_validation.log)** | MBPP Verifier Unit Tests | 1.50 (correct + formatted) vs 0.50 (formatted but logically failed) verified |
-| **[`05_historical_jax_tpu_v5e_baseline.log`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/telemetry/05_historical_jax_tpu_v5e_baseline.log)** | Historical JAX Baseline | 224 steps in 03:01 (1.24 step/s), Loss: 4.82 -> 2.64 on TPU v5e |
+| [`01_tpu_v6e_hardware_verification.log`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/telemetry/01_tpu_v6e_hardware_verification.log) | `v6e-1` Hardware Diagnostic | `1024x1024` BF16 `torch.matmul` on `tpu:0` in **1.42 ms** (`torch.accelerator.synchronize()`) |
+| [`02_torchtpu_engine_registry.log`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/telemetry/02_torchtpu_engine_registry.log) | VeRL Engine Registry | Registered `('tpu', 'google'): TorchTitanTPUEngineWithLMHead` with SplashAttention Pallas kernel |
+| [`03_gcp_spot_preemption_event.log`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/telemetry/03_gcp_spot_preemption_event.log) | Spot Maintenance Preemption | Real `state: PREEMPTED` event captured on `tpu-v6-1794461882` in `europe-west4-a` |
+| [`04_mbpp_data_and_reward_validation.log`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/telemetry/04_mbpp_data_and_reward_validation.log) | MBPP Dataset & Reward Test | 500 train / 464 test Parquets; dual-metric verifier scored 1.50 (pass) vs 0.50 (format-only) |
+| [`05_historical_jax_tpu_v5e_baseline.log`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/telemetry/05_historical_jax_tpu_v5e_baseline.log) | Historical JAX `v5e-1` Run | 224 steps in 03:01 (1.24 steps/sec), Loss 4.82 -> 2.64 |
 
-### Generation Evolution: Step 0 vs Step 100+ (MBPP Task 11)
-During GRPO training, the combined format and unit-test reward signal guides the model to adopt structured chain-of-thought reasoning:
+Here is what the native `PrivateUse1` initialization and BF16 matmul check actually look like on `tpu-v6-1794461882` (`01_tpu_v6e_hardware_verification.log`):
 
-#### ❌ Step 0: Unstructured Raw Sampling (Reward: 0.00 — Failed)
+```text
+Successfully renamed PrivateUse1 backend to 'tpu'. Device: device(type='tpu')
+I0000 00:00:1794466253.664820   13216 libtpu_version.cc:63] Setting libtpu version to: 0.0.52
+🐍 Python Version:     3.11.0rc1
+🔥 PyTorch Version:    2.15.0+cpu
+⚡ TorchTPU Version:   0.2.0
+🚀 Native Device:      tpu:0
+⚙️  Executing 1024x1024 BFloat16 Matrix Multiplication on TPU...
+✅ Matmul completed successfully!
+   - Execution time: 1.42 ms (warm compilation + execution)
+```
+
+And inspecting VeRL's `EngineRegistry` (`02_torchtpu_engine_registry.log`) confirms that the TPU hardware plugin hooks TorchTitan directly into VeRL without custom forks:
+
+```text
+EngineRegistry:
+  language_model:
+    torchtitan:
+      ('tpu', 'google'): <class 'verl_hardware_plugin.accelerators.tpu.engines.torchtitan_tpu.TorchTitanTPUEngineWithLMHead'>
+```
+
+### Illustrative Reward Progression: MBPP Task 11 (`remove_Occ`)
+
+While the `telemetry/` logs above cover single-chip hardware bring-up, engine registration, and reward unit tests rather than a completed 100+ step GRPO training curve, the example below illustrates what the dual-metric verifier in `src/reward_functions.py` is designed to reward on **MBPP Task 11** (`remove_Occ`).
+
+#### Unformatted Baseline Output (Reward: 0.00)
 ```text
 Prompt: Write a python function to remove first and last occurrence of a given character from the string.
 assert remove_Occ("hello", "l") == "heo"
@@ -292,30 +214,23 @@ def remove_Occ(s, ch):
     return s.replace(ch, '')
 
 Evaluation:
-- Format Score: 0.00 (Missing <think> and <answer> XML tags)
-- Execution Score: 0.00 (Unparseable block; fails when character appears > 2 times)
-- Total Reward: 0.00
+- Format Score:    0.00 (Missing <think> and <answer> tags)
+- Execution Score: 0.00 (No parseable <answer> block; str.replace strips all occurrences)
+- Total Reward:    0.00 / 1.50
 ```
 
-#### ✅ Step 100+: Structured CoT Reasoning & Unit Test Pass (Reward: 1.50 — SOTA Convergence)
-```text
+#### Target CoT + Fenced Solution (Reward: 1.50)
+````text
 <think>
-Problem: Write a Python function `remove_Occ(s, ch)` that removes only the first and last occurrence of character `ch` from string `s`.
-Requirements:
-- Input: String `s` and target character `ch`.
-- Output: A new string with only the first instance and the last instance of `ch` removed.
-Analysis:
-- If we naively used `str.replace(ch, "")`, it would strip ALL occurrences, which violates the requirement if `ch` appears 3 or more times.
-- We locate the first index of `ch` via `s.find(ch)` and the last index via `s.rfind(ch)`.
-- If `ch` is not found (`first == -1`), return `s` unchanged.
-- If `first == last` (only one occurrence), remove that single character: `s[:first] + s[first+1:]`.
-- If `first < last`, slice around both boundaries: `s[:first] + s[first+1:last] + s[last+1:]`.
-Test cases:
-- remove_Occ("hello", "l") -> 'l' at 2 and 3 -> "heo" (PASS)
-- remove_Occ("abcda", "a") -> 'a' at 0 and 4 -> "bcd" (PASS)
-- remove_Occ("PHP", "P") -> 'P' at 0 and 2 -> "H" (PASS)
+We need to remove only the first and last occurrence of `ch` in `s`.
+Using `str.replace(ch, "")` would remove all occurrences if `ch` appears 3+ times.
+Instead, find `first = s.find(ch)` and `last = s.rfind(ch)`:
+- If `first == -1`: return `s`.
+- If `first == last`: return `s[:first] + s[first+1:]`.
+- Otherwise: slice out both indices `s[:first] + s[first+1:last] + s[last+1:]`.
 </think>
 <answer>
+```python
 def remove_Occ(s, ch):
     first = s.find(ch)
     if first == -1:
@@ -324,31 +239,22 @@ def remove_Occ(s, ch):
     if first == last:
         return s[:first] + s[first+1:]
     return s[:first] + s[first+1:last] + s[last+1:]
+```
 </answer>
 
 Evaluation:
-- Format Score: 0.50 (Valid <think> and <answer> blocks)
-- Execution Score: 1.00 (Subprocess execution passed all 3 assertions in 0.04s)
-- Total Reward: 1.50
-```
+- Format Score:    0.50 (<think> +0.20, <answer> +0.20, python fence +0.10)
+- Execution Score: 1.00 (All 3 MBPP assertions pass in subprocess)
+- Total Reward:    1.50 / 1.50
+````
 
 ---
 
-## Sprint Deliverables & Verification Matrix
+## Takeaways & Next Steps
 
-| Component | Target Scope | Verification Artifact | Direct Deliverable |
-| :--- | :--- | :--- | :--- |
-| **Repository Foundation** | Monorepo structure, sanitized environment configs, telemetry logs | Commit `86b8ae8` Verified | [GitHub Repository](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo) |
-| **TPU v6e Provisioning** | Multi-zone automated Spot allocator with preemption recovery | Preemption Caught in 38s | [`scripts/request_tpu_v6.sh`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/scripts/request_tpu_v6.sh) |
-| **Native Runtime Environment** | Setup script for `torch_tpu`, `torchtitan`, `vllm-tpu`, `verl` | Zero-XLA `torch.device("tpu")` Passed | [`scripts/setup_tpu_env.sh`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/scripts/setup_tpu_env.sh) |
-| **Dataset & Verifier Pipeline** | MBPP streaming loader, sandboxed subprocess execution verifier | Unit Assertions Passed (0.04s Exec) | [`src/data_preprocess.py`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/src/data_preprocess.py) & [`src/reward_functions.py`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/src/reward_functions.py) |
-| **GRPO Distributed Recipe** | Ray orchestrator pairing TorchTitan (trainer) with vLLM-TorchTPU | Decoupled Ray Config Verified | [`configs/grpo_torchtitan_vllm_tpu.yaml`](https://github.com/YuchengWang/learning-tpu/blob/main/torchtpu-verl-grpo/configs/grpo_torchtitan_vllm_tpu.yaml) |
-| **Hardware Telemetry** | BFloat16 matmul, engine registry, and Spot preemption lifecycle logs | 1024x1024 BF16 Matmul in 1.42ms | [`telemetry/`](https://github.com/YuchengWang/learning-tpu/tree/main/torchtpu-verl-grpo/telemetry) |
+Building this pipeline on Cloud TPU v6e reinforced two practical lessons for us:
 
----
+1. **Native PyTorch on TPU removes the translation tax**: Getting `torch.device("tpu")`, `TorchTitanTPUEngineWithLMHead`, and `vLLM-TorchTPU` running inside a clean Python 3.11 venv via `setup_tpu_env.sh` was noticeably simpler than maintaining JAX/Flax/libtpu combinations on Ubuntu 22.04.
+2. **Provisioning automation matters as much as the training config**: On Spot TPUs, multi-zone fallback (`request_tpu_v6.sh`) and queue polling (`monitor_tpu.sh`) save more engineering hours than micro-optimizing hyperparameters, because `PREEMPTED` maintenance events and zone contention are part of normal operation.
 
-## Field Notes & Practical Takeaways for ML Engineers
-
-1. **Embrace Native PyTorch on TPU**: The introduction of `torch_tpu` and the C++ `PrivateUse1` dispatcher marks a turning point for TPU development. If you are starting a new LLM training or fine-tuning project, avoid legacy XLA wrappers and write standard PyTorch code. The integration with Hugging Face and modern distributed primitives (FSDP2, DTensor) works out of the box.
-2. **Decouple Rollout and Training Workloads**: RL post-training workloads are structurally heterogeneous. Rollout sampling requires fast autoregressive token generation with large KV caches, while policy updates require compute-bound backward passes and gradient aggregation. Running decoupled Ray workers using vLLM-TorchTPU for generation and TorchTitan for training maximizes hardware utilization across both phases.
-3. **Design for Spot Preemptions from Day One**: Cloud TPU Spot instances provide compelling economics (~70% discount compared to on-demand pricing), making large-scale experimentation accessible. However, building automated preemption listeners and state checkpointing into your deployment pipeline is essential to protect long-running training jobs from unexpected interruptions.
+Our next step is to run the full 250-step GRPO training sweep on a multi-chip **TPU v6e-4** slice (`128GB` HBM) using `configs/grpo_torchtitan_vllm_tpu.yaml` and publish the end-to-end reward and pass@1 learning curves alongside these bring-up logs.
